@@ -3,6 +3,7 @@ import type { DashboardPayload } from "./types";
 const BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 
 export async function fetchDashboard(): Promise<DashboardPayload> {
+  if (!BASE) throw new Error("Backend not connected. Set VITE_API_BASE_URL to your Render backend URL.");
   const response = await fetch(`${BASE}/api/dashboard`);
   if (!response.ok) {
     throw new Error(`Dashboard request failed: ${response.status}`);
