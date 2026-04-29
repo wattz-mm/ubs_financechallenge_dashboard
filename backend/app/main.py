@@ -1,8 +1,11 @@
+import os
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+IS_VERCEL = bool(os.environ.get("VERCEL"))
 
 from .ai import (
     build_ai_layers,
@@ -77,16 +80,60 @@ async def refresh_cache():
     }
 
 
+def _build_sourced_cache():
+    """Fast startup using sourced data only — no live HTTP. Used on Vercel."""
+    company_headlines: dict[str, list] = {"1072.HK": [], "2727.HK": []}
+    raw_screener = sourced_energy_assets()  # placeholder; screener uses sourced rows
+    from .sourced_data import sourced_stock_rows
+    raw_screener = sourced_stock_rows()
+    sentiment_series: list = []
+    sentiment_breakdown: list = []
+    company_sentiment = finbert_company_sentiment(company_headlines)
+    historical_sentiment = build_historical_sentiment_analysis(sourced_historical_sentiment_records(), company_sentiment)
+    stock_screener = score_stock_screener(raw_screener, sentiment_breakdown)
+    narratives: list = []
+    company_factors, company_scores = build_company_signals(None, historical_sentiment)
+    quant_metrics = build_quant_metrics(sentiment_series, [], stock_screener, company_sentiment)
+    ai_layers = build_ai_layers(company_sentiment, quant_metrics, company_factors, historical_sentiment)
+    coal_score = next((m["value"] for m in quant_metrics if m["metric"] == "Coal displacement demand push"), 0.0)
+    alerts = detect_alerts(sentiment_series, coal_displacement_score=coal_score)
+    insights = generate_insights(company_scores, narratives, alerts, company_sentiment, historical_sentiment)
+    cache["dashboard"] = {
+        "generatedAt": datetime.now(timezone.utc),
+        "headlines": [],
+        "sentimentSeries": sentiment_series,
+        "sentimentBreakdown": sentiment_breakdown,
+        "quantMetrics": quant_metrics,
+        "regionalSentiment": sourced_regional_sentiment(),
+        "assets": sourced_energy_assets(),
+        "narratives": narratives,
+        "companyFactors": company_factors,
+        "companyScores": company_scores,
+        "companySentiment": company_sentiment,
+        "historicalSentiment": historical_sentiment,
+        "aiLayers": ai_layers,
+        "energyDemandSignals": sourced_energy_demand_signals(),
+        "dataFreshness": build_data_freshness([], company_headlines, stock_screener),
+        "stockScreener": stock_screener,
+        "alerts": alerts,
+        "insights": insights,
+    }
+
+
 @app.on_event("startup")
 async def startup_event():
-    await refresh_cache()
-    scheduler.add_job(refresh_cache, "interval", hours=3, id="refresh-energy-intel", replace_existing=True)
-    scheduler.start()
+    if IS_VERCEL:
+        _build_sourced_cache()
+    else:
+        await refresh_cache()
+        scheduler.add_job(refresh_cache, "interval", hours=3, id="refresh-energy-intel", replace_existing=True)
+        scheduler.start()
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    scheduler.shutdown(wait=False)
+    if not IS_VERCEL:
+        scheduler.shutdown(wait=False)
 
 
 @app.get("/health")
